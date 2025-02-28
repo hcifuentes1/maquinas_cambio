@@ -8,6 +8,8 @@ import sqlite3
 import numpy as np
 import logging
 
+
+
 # Configurar logging
 logging.basicConfig(
     level=logging.INFO,
@@ -246,6 +248,8 @@ class ReplaySystemBasculacion:
             return pd.DataFrame()
 
 
+
+
 def create_replay_controls_basculacion():
     """
     Crea los controles para el sistema de replay basado en basculación
@@ -366,7 +370,7 @@ def create_replay_controls_basculacion():
     controls.children.append(
         dcc.Interval(
             id='replay-interval-component',
-            interval=1000,  # en milisegundos
+            interval=500,  # en milisegundos
             n_intervals=0
         )
     )
@@ -443,6 +447,8 @@ def basculacion_callback_wrapper(selected_date, selected_machine, replay_system)
         logger.error(f"Error actualizando opciones de basculación: {e}")
         return [], f"Error: {str(e)}"
     
+    
+    
 
 def replay_status_callback_wrapper(n_play, n_pause, n_stop, n_intervals,
                                    selected_date, selected_machine, selected_basculacion, 
@@ -481,24 +487,21 @@ def replay_status_callback_wrapper(n_play, n_pause, n_stop, n_intervals,
     print(f"Valores: n_play={n_play}, n_pause={n_pause}, n_stop={n_stop}, n_intervals={n_intervals}")
    
     try:
+        # Acceder directamente a las variables globales
+        from __main__ import data_lock, estado_maquinas
+        
         if trigger_id == 'replay-play-button' and n_play and selected_date and selected_machine and selected_basculacion:
             # Verificación robusta de los datos de entrada
             print(f"Botón Reproducir presionado ({n_play} veces)")
             print(f"Iniciar reproducción: Fecha={selected_date}, Máquina={selected_machine}, Evento={selected_basculacion}")
             
             # Detener cualquier reproducción anterior
-            if replay_system.current_replay and 'machine_id' in replay_system.current_replay:
-                old_machine = replay_system.current_replay.get('machine_id')
-                if old_machine:
-                    try:
-                        import sys
-                        if 'hmi_dashboard' in sys.modules:
-                            hmi_dashboard = sys.modules['hmi_dashboard']
-                            with hmi_dashboard.data_lock:
-                                if old_machine in hmi_dashboard.estado_maquinas:
-                                    hmi_dashboard.estado_maquinas[old_machine]["modo_operacion"] = "normal"
-                    except Exception as e:
-                        print(f"Error al resetear modo de operación anterior: {e}")
+            with data_lock:
+                if replay_system.current_replay and 'machine_id' in replay_system.current_replay:
+                    old_machine = replay_system.current_replay.get('machine_id')
+                    if old_machine and old_machine in estado_maquinas:
+                        estado_maquinas[old_machine]["modo_operacion"] = "normal"
+                        print(f"Modo de operación restablecido para {old_machine}")
             
             # Obtener datos del evento de basculación seleccionado
             basculacion_timestamp = pd.to_datetime(selected_basculacion)
@@ -534,34 +537,26 @@ def replay_status_callback_wrapper(n_play, n_pause, n_stop, n_intervals,
                 print(f"Último registro: {datos_evento.iloc[-1]}")
            
             # Actualizar directamente el estado de la máquina seleccionada
-            try:
-                import sys
-                if 'hmi_dashboard' in sys.modules:
-                    hmi_dashboard = sys.modules['hmi_dashboard']
-                    with hmi_dashboard.data_lock:
-                        if selected_machine in hmi_dashboard.estado_maquinas:
-                            estado = hmi_dashboard.estado_maquinas[selected_machine]
-                            estado["modo_operacion"] = "replay"
-                           
-                            if len(datos_evento) > 0:
-                                row = datos_evento.iloc[0]
-                                if len(estado["timestamp"]) > 0:
-                                    estado["timestamp"][-1] = row['timestamp']
-                                    estado["voltaje"][-1] = row['voltaje']
-                                    estado["corriente"][-1] = row['corriente']
-                                else:
-                                    estado["timestamp"].append(row['timestamp'])
-                                    estado["voltaje"].append(row['voltaje'])
-                                    estado["corriente"].append(row['corriente'])
-                               
-                                estado["posicion"] = row['posicion']
-                                estado["ciclo_progreso"] = row['ciclo_progreso']
-                               
-                                print(f"Estado inicial forzado: Posición={estado['posicion']}, Progreso={estado['ciclo_progreso']}")
-            except Exception as e:
-                import traceback
-                print(f"No se pudo forzar estado inicial: {str(e)}")
-                print(traceback.format_exc())
+            with data_lock:
+                if selected_machine in estado_maquinas:
+                    estado = estado_maquinas[selected_machine]
+                    estado["modo_operacion"] = "replay"
+                   
+                    if len(datos_evento) > 0:
+                        row = datos_evento.iloc[0]
+                        if len(estado["timestamp"]) > 0:
+                            estado["timestamp"][-1] = row['timestamp']
+                            estado["voltaje"][-1] = row['voltaje']
+                            estado["corriente"][-1] = row['corriente']
+                        else:
+                            estado["timestamp"].append(row['timestamp'])
+                            estado["voltaje"].append(row['voltaje'])
+                            estado["corriente"].append(row['corriente'])
+                       
+                        estado["posicion"] = row['posicion']
+                        estado["ciclo_progreso"] = row['ciclo_progreso']
+                       
+                        print(f"Estado inicial forzado: Posición={estado['posicion']}, Progreso={estado['ciclo_progreso']}")
            
             return [f"Reproduciendo evento de {basculacion_timestamp.strftime('%H:%M:%S')}", 0] + date_values
        
@@ -589,18 +584,16 @@ def replay_status_callback_wrapper(n_play, n_pause, n_stop, n_intervals,
             if replay_system.current_replay and 'machine_id' in replay_system.current_replay:
                 machine_id = replay_system.current_replay['machine_id']
                 print(f"Deteniendo reproducción para {machine_id}")
-                try:
-                    import sys
-                    if 'hmi_dashboard' in sys.modules:
-                        hmi_dashboard = sys.modules['hmi_dashboard']
-                        with hmi_dashboard.data_lock:
-                            if machine_id in hmi_dashboard.estado_maquinas:
-                                # IMPORTANTE: Resetear el estado explícitamente
-                                estado = hmi_dashboard.estado_maquinas[machine_id]
-                                estado["modo_operacion"] = "normal"
-                                print(f"Estado de máquina {machine_id} restablecido a 'normal'")
-                except Exception as e:
-                    print(f"Error al resetear modo de operación: {e}")
+                
+                # Usar mutex para proteger la operación
+                with data_lock:
+                    if machine_id in estado_maquinas:
+                        # IMPORTANTE: Resetear el estado explícitamente
+                        estado = estado_maquinas[machine_id]
+                        estado["modo_operacion"] = "normal"
+                        # También resetear progreso y posición para mostrar estado en espera
+                        estado["ciclo_progreso"] = 0
+                        print(f"Estado de máquina {machine_id} restablecido a 'normal'")
             
             # IMPORTANTE: Limpiar explícitamente el objeto de reproducción
             replay_system.current_replay = None
@@ -634,18 +627,15 @@ def replay_status_callback_wrapper(n_play, n_pause, n_stop, n_intervals,
             if current_idx >= replay_system.current_replay['total_frames']:
                 machine_id = replay_system.current_replay.get('machine_id')
                 replay_system.current_replay = None
-                # Resetear modo de operación
-                if machine_id:
-                    try:
-                        import sys
-                        if 'hmi_dashboard' in sys.modules:
-                            hmi_dashboard = sys.modules['hmi_dashboard']
-                            with hmi_dashboard.data_lock:
-                                if machine_id in hmi_dashboard.estado_maquinas:
-                                    hmi_dashboard.estado_maquinas[machine_id]["modo_operacion"] = "normal"
-                                    print(f"Reproducción completada, máquina {machine_id} restablecida a modo normal")
-                    except Exception as e:
-                        print(f"Error al resetear modo de operación al finalizar: {e}")
+                
+                # Resetear modo de operación protegido por mutex
+                with data_lock:
+                    if machine_id in estado_maquinas:
+                        estado_maquinas[machine_id]["modo_operacion"] = "normal"
+                        # Resetear progreso al finalizar
+                        estado_maquinas[machine_id]["ciclo_progreso"] = 0
+                        print(f"Reproducción completada, máquina {machine_id} restablecida a modo normal")
+                
                 return ["Reproducción completada", 100] + date_values
            
             # Calcular progreso
@@ -660,39 +650,47 @@ def replay_status_callback_wrapper(n_play, n_pause, n_stop, n_intervals,
             current_time = replay_system.current_replay['data'].iloc[current_idx]['timestamp']
             time_str = current_time.strftime('%H:%M:%S.%f')[:-3]
            
-            # Actualizar directamente el estado de la máquina seleccionada
+            # Actualizar directamente el estado de la máquina seleccionada - PARTE CRÍTICA
             machine_id = replay_system.current_replay.get('machine_id')
             if not machine_id:
                 print("Error: No hay machine_id en replay_system.current_replay")
                 return [f"Error: Sin ID de máquina", progress] + date_values
-                
+            
             try:
-                import sys
-                if 'hmi_dashboard' in sys.modules:
-                    hmi_dashboard = sys.modules['hmi_dashboard']
-                    with hmi_dashboard.data_lock:
-                        if machine_id in hmi_dashboard.estado_maquinas:
-                            estado = hmi_dashboard.estado_maquinas[machine_id]
-                            row = replay_system.current_replay['data'].iloc[current_idx]
-                           
-                            # Actualizar estado directamente
-                            if len(estado["timestamp"]) > 0:
-                                estado["timestamp"][-1] = row['timestamp']
-                                estado["voltaje"][-1] = row['voltaje']
-                                estado["corriente"][-1] = row['corriente']
-                            else:
-                                estado["timestamp"].append(row['timestamp'])
-                                estado["voltaje"].append(row['voltaje'])
-                                estado["corriente"].append(row['corriente'])
-                           
-                            estado["posicion"] = row['posicion']
-                            estado["ciclo_progreso"] = row['ciclo_progreso']
-                            estado["modo_operacion"] = "replay"
-                           
-                            print(f"FORZADA actualización directa para {machine_id}: Pos={estado['posicion']}, Prog={estado['ciclo_progreso']}")
+                with data_lock:
+                    if machine_id in estado_maquinas:
+                        estado = estado_maquinas[machine_id]
+                        row = replay_system.current_replay['data'].iloc[current_idx]
+                       
+                        # Actualizar estado directamente
+                        if len(estado["timestamp"]) > 0:
+                            estado["timestamp"][-1] = row['timestamp']
+                            estado["voltaje"][-1] = row['voltaje']
+                            estado["corriente"][-1] = row['corriente']
+                        else:
+                            estado["timestamp"].append(row['timestamp'])
+                            estado["voltaje"].append(row['voltaje'])
+                            estado["corriente"].append(row['corriente'])
+                       
+                        # FORZAR los valores críticos para la visualización
+                        estado["posicion"] = row['posicion']
+                        estado["ciclo_progreso"] = row['ciclo_progreso']
+                        estado["modo_operacion"] = "replay"
+                       
+                        # Agregar más información de depuración
+                        print(f"ACTUALIZACIÓN CRUCIAL para {machine_id}:")
+                        print(f"  - Índice actual: {current_idx}/{replay_system.current_replay['total_frames']}")
+                        print(f"  - Posición antigua: {estado.get('posicion_anterior', 'N/A')}")
+                        print(f"  - Nueva posición: {estado['posicion']}")
+                        print(f"  - Nuevo progreso: {estado['ciclo_progreso']}")
+                        print(f"  - Voltaje: {estado['voltaje'][-1]}")
+                        print(f"  - Corriente: {estado['corriente'][-1]}")
+                        
+                        # Guardar posición anterior para depuración
+                        estado['posicion_anterior'] = estado['posicion']
             except Exception as e:
                 import traceback
-                print(f"Error actualizando estado directo: {str(e)}")
+                print(f"ERROR CRÍTICO actualizando estado directo: {str(e)}")
                 print(traceback.format_exc())
            
             return [f"Reproduciendo: {time_str} ({current_idx+1}/{replay_system.current_replay['total_frames']})", progress] + date_values
@@ -704,6 +702,9 @@ def replay_status_callback_wrapper(n_play, n_pause, n_stop, n_intervals,
         return [f"Error: {str(e)}", 0] + date_values
    
     return ["Esperando selección...", 0] + date_values
+
+
+
 
 
 def register_replay_callbacks_basculacion(app, replay_system):

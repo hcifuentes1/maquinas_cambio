@@ -561,13 +561,14 @@ def update_replay_visualization(selected_machine, n_intervals):
         )
     
     try:
+        # Usar data_lock para asegurar acceso exclusivo a los datos
         with data_lock:
             if selected_machine in estado_maquinas:
                 estado = estado_maquinas[selected_machine]
                 
                 # Verificar explícitamente el modo de operación
                 if estado["modo_operacion"] != "replay":
-                    # Forzar el modo replay para asegurar visualización
+                    # Forzar el modo replay para asegurar visualización si estamos en una sesión de replay
                     estado["modo_operacion"] = "replay"
                     print(f"Forzando modo replay para visualización de {selected_machine}")
                 
@@ -575,81 +576,107 @@ def update_replay_visualization(selected_machine, n_intervals):
                 current_idx = replay_system.current_replay.get('current_index', 0)
                 total_frames = replay_system.current_replay.get('total_frames', 1)
                 
-                # Crear una versión simplificada de la tarjeta de máquina para la visualización de replay
-                return dbc.Card([
-                    dbc.CardHeader([
-                        html.H5(f"Máquina: {selected_machine} (Modo Replay)"),
-                        html.Small(f"Reproduciendo frame {current_idx + 1} de {total_frames}")
-                    ]),
-                    dbc.CardBody([
+                # Hacer una copia local de los datos necesarios para evitar bloqueos prolongados
+                posicion = estado["posicion"]
+                ciclo_progreso = estado["ciclo_progreso"]
+                voltaje = estado["voltaje"][-1] if estado["voltaje"] else 0
+                corriente = estado["corriente"][-1] if estado["corriente"] else 0
+                timestamps = estado["timestamp"][-20:] if estado["timestamp"] else []
+                voltajes = estado["voltaje"][-20:] if estado["voltaje"] else []
+                corrientes = estado["corriente"][-20:] if estado["corriente"] else []
+                
+                # Imprimir información de depuración
+                print(f"Visualización actual: n_intervals={n_intervals}, máquina={selected_machine}, posición={posicion}, progreso={ciclo_progreso:.1f}%")
+        
+        # Componente de depuración
+        visualizacion_debug = html.Div([
+            html.H6("Datos de depuración:", className="mb-2"),
+            html.Ul([
+                html.Li(f"Modo: {estado['modo_operacion']}"),
+                html.Li(f"Posición real en estado: {posicion}"),
+                html.Li(f"Progreso real en estado: {ciclo_progreso:.2f}%"),
+                html.Li(f"Índice actual: {current_idx + 1}/{total_frames}"),
+                html.Li(f"n_intervals: {n_intervals}")
+            ], className="small")
+        ], className="mt-3 px-3 py-2 border border-info rounded")
+        
+        # Crear una versión simplificada de la tarjeta de máquina fuera del bloque with
+        return dbc.Card([
+            dbc.CardHeader([
+                html.H5(f"Máquina: {selected_machine} (Modo Replay)"),
+                html.Small(f"Reproduciendo frame {current_idx + 1} de {total_frames}")
+            ]),
+            dbc.CardBody([
+                dbc.Row([
+                    # Visualización de la máquina
+                    dbc.Col([
+                        html.Div("Estado actual:", className="mb-2"),
+                        crear_svg_maquina(posicion, ciclo_progreso),
+                        html.Div([
+                            html.Div(f"Posición: {posicion}", className="mt-2 h5"),
+                            html.Div(f"Progreso: {ciclo_progreso:.1f}%", className="mt-1"),
+                        ], className="text-center")
+                    ], width=6),
+                    
+                    # Gráficos básicos
+                    dbc.Col([
                         dbc.Row([
-                            # Visualización de la máquina
                             dbc.Col([
-                                html.Div("Estado actual:", className="mb-2"),
-                                crear_svg_maquina(estado["posicion"], estado["ciclo_progreso"]),
-                                html.Div([
-                                    html.Div(f"Posición: {estado['posicion']}", className="mt-2 h5"),
-                                    html.Div(f"Progreso: {estado['ciclo_progreso']:.1f}%", className="mt-1"),
-                                ], className="text-center")
+                                html.Div("Voltaje (V)", className="text-center"),
+                                html.Div(
+                                    f"{voltaje:.1f}" if voltaje else "N/A",
+                                    className="h2 text-center",
+                                    style={'color': '#2196F3'}
+                                )
                             ], width=6),
                             
-                            # Gráficos básicos
                             dbc.Col([
-                                dbc.Row([
-                                    dbc.Col([
-                                        html.Div("Voltaje (V)", className="text-center"),
-                                        html.Div(
-                                            f"{estado['voltaje'][-1]:.1f}" if estado['voltaje'] else "N/A",
-                                            className="h2 text-center",
-                                            style={'color': '#2196F3'}
-                                        )
-                                    ], width=6),
-                                    
-                                    dbc.Col([
-                                        html.Div("Corriente (A)", className="text-center"),
-                                        html.Div(
-                                            f"{estado['corriente'][-1]:.1f}" if estado['corriente'] else "N/A",
-                                            className="h2 text-center",
-                                            style={'color': '#FF9800'}
-                                        )
-                                    ], width=6)
-                                ]),
-                                dcc.Graph(
-                                    figure=go.Figure(
-                                        go.Scatter(
-                                            x=estado["timestamp"][-20:],  # Solo últimos 20 puntos para simplificar
-                                            y=estado["voltaje"][-20:],
-                                            line=dict(color='#2196F3'),
-                                            name='Voltaje'
-                                        )
-                                    ).update_layout(
-                                        title="Voltaje",
-                                        margin=dict(l=30, r=30, t=40, b=30),
-                                        height=150,
-                                        template="plotly_dark"
-                                    ),
-                                    config={'displayModeBar': False}
-                                ),
-                                dcc.Graph(
-                                    figure=go.Figure(
-                                        go.Scatter(
-                                            x=estado["timestamp"][-20:],
-                                            y=estado["corriente"][-20:],
-                                            line=dict(color='#FF9800'),
-                                            name='Corriente'
-                                        )
-                                    ).update_layout(
-                                        title="Corriente",
-                                        margin=dict(l=30, r=30, t=40, b=30),
-                                        height=150,
-                                        template="plotly_dark"
-                                    ),
-                                    config={'displayModeBar': False}
+                                html.Div("Corriente (A)", className="text-center"),
+                                html.Div(
+                                    f"{corriente:.1f}" if corriente else "N/A",
+                                    className="h2 text-center",
+                                    style={'color': '#FF9800'}
                                 )
                             ], width=6)
-                        ])
-                    ])
+                        ]),
+                        dcc.Graph(
+                            figure=go.Figure(
+                                go.Scatter(
+                                    x=timestamps,
+                                    y=voltajes,
+                                    line=dict(color='#2196F3'),
+                                    name='Voltaje'
+                                )
+                            ).update_layout(
+                                title="Voltaje",
+                                margin=dict(l=30, r=30, t=40, b=30),
+                                height=150,
+                                template="plotly_dark"
+                            ),
+                            config={'displayModeBar': False}
+                        ),
+                        dcc.Graph(
+                            figure=go.Figure(
+                                go.Scatter(
+                                    x=timestamps,
+                                    y=corrientes,
+                                    line=dict(color='#FF9800'),
+                                    name='Corriente'
+                                )
+                            ).update_layout(
+                                title="Corriente",
+                                margin=dict(l=30, r=30, t=40, b=30),
+                                height=150,
+                                template="plotly_dark"
+                            ),
+                            config={'displayModeBar': False}
+                        ),
+                        # Añadir componente de depuración
+                        visualizacion_debug
+                    ], width=6)
                 ])
+            ])
+        ])
                 
     except Exception as e:
         import traceback
@@ -685,59 +712,70 @@ def sync_replay_on_play(n_clicks, selected_machine):
     # Solo responder al botón de reproducción
     if ctx.triggered[0]['prop_id'] == 'replay-play-button.n_clicks':
         try:
+            # Usar data_lock para asegurar acceso exclusivo a los datos
+            estado = None
+            posicion = None
+            ciclo_progreso = None
+            voltaje = None
+            corriente = None
+            
             with data_lock:
                 # Verificar si la máquina está en modo replay
                 if selected_machine in estado_maquinas:
                     estado = estado_maquinas[selected_machine]
                     
                     # Dar un poco de tiempo para que se establezca el estado
-                    import time
-                    time.sleep(0.5)
-                    
                     if estado["modo_operacion"] == "replay":
                         print(f"Forzando actualización de visualización para {selected_machine} después de iniciar reproducción")
                         
-                        # Crear visualización de la máquina
-                        return dbc.Card([
-                            dbc.CardHeader(f"Máquina: {selected_machine} (Modo Replay)"),
-                            dbc.CardBody([
+                        # Capturar los datos que necesitamos mostrar
+                        posicion = estado["posicion"]
+                        ciclo_progreso = estado["ciclo_progreso"]
+                        voltaje = estado["voltaje"][-1] if estado["voltaje"] else 0
+                        corriente = estado["corriente"][-1] if estado["corriente"] else 0
+            
+            if estado and estado["modo_operacion"] == "replay":
+                # Crear visualización de la máquina fuera del bloque with
+                return dbc.Card([
+                    dbc.CardHeader(f"Máquina: {selected_machine} (Modo Replay)"),
+                    dbc.CardBody([
+                        dbc.Row([
+                            # Visualización de la máquina
+                            dbc.Col([
+                                html.Div("Estado actual:", className="mb-2"),
+                                crear_svg_maquina(posicion, ciclo_progreso),
+                                html.Div([
+                                    html.Div(f"Posición: {posicion}", className="mt-2 h5"),
+                                    html.Div(f"Progreso: {ciclo_progreso:.1f}%", className="mt-1"),
+                                ], className="text-center")
+                            ], width=6),
+                            
+                            # Valores numéricos
+                            dbc.Col([
                                 dbc.Row([
-                                    # Visualización de la máquina
                                     dbc.Col([
-                                        html.Div("Estado actual:", className="mb-2"),
-                                        crear_svg_maquina(estado["posicion"], estado["ciclo_progreso"]),
-                                        html.Div([
-                                            html.Div(f"Posición: {estado['posicion']}", className="mt-2 h5"),
-                                            html.Div(f"Progreso: {estado['ciclo_progreso']:.1f}%", className="mt-1"),
-                                        ], className="text-center")
+                                        html.Div("Voltaje (V)", className="text-center"),
+                                        html.Div(
+                                            f"{voltaje:.1f}" if voltaje else "N/A",
+                                            className="h2 text-center",
+                                            style={'color': '#2196F3'}
+                                        )
                                     ], width=6),
                                     
-                                    # Valores numéricos
                                     dbc.Col([
-                                        dbc.Row([
-                                            dbc.Col([
-                                                html.Div("Voltaje (V)", className="text-center"),
-                                                html.Div(
-                                                    f"{estado['voltaje'][-1]:.1f}" if estado['voltaje'] else "N/A",
-                                                    className="h2 text-center",
-                                                    style={'color': '#2196F3'}
-                                                )
-                                            ], width=6),
-                                            
-                                            dbc.Col([
-                                                html.Div("Corriente (A)", className="text-center"),
-                                                html.Div(
-                                                    f"{estado['corriente'][-1]:.1f}" if estado['corriente'] else "N/A",
-                                                    className="h2 text-center",
-                                                    style={'color': '#FF9800'}
-                                                )
-                                            ], width=6)
-                                        ]),
-                                        html.Div("Iniciando visualización...", className="text-center mt-3")
+                                        html.Div("Corriente (A)", className="text-center"),
+                                        html.Div(
+                                            f"{corriente:.1f}" if corriente else "N/A",
+                                            className="h2 text-center",
+                                            style={'color': '#FF9800'}
+                                        )
                                     ], width=6)
-                                ])
-                            ])
+                                ]),
+                                html.Div("Iniciando visualización...", className="text-center mt-3")
+                            ], width=6)
                         ])
+                    ])
+                ])
                 
         except Exception as e:
             import traceback

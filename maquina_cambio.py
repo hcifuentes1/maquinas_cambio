@@ -11,6 +11,9 @@ def crear_svg_maquina(posicion, progreso):
         posicion (str): 'Izquierda' o 'Derecha'
         progreso (float): Valor entre 0 y 100
     """
+    # Log para depuración
+    print(f"CREAR_SVG_MAQUINA llamada con: posicion={posicion}, progreso={progreso}")
+    
     # Asegurar que el progreso sea un número
     progreso = float(progreso) if progreso is not None else 0
    
@@ -52,8 +55,16 @@ def crear_svg_maquina(posicion, progreso):
                   "#4CAF50" if posicion == "Izquierda" else \
                   "#FF5722"
    
-    # Texto de posición actual
-    texto_posicion = "Sin control" if estado_movimiento == "En movimiento" else posicion
+    # Texto de posición actual - IMPORTANTE: durante el movimiento, mostrar la posición real
+    # en lugar de "Sin control" para mayor claridad durante el replay
+    if estado_movimiento == "En movimiento":
+        # En modo replay o cuando nos movemos, queremos mostrar la posición real
+        texto_posicion = posicion
+        # Log adicional para depuración
+        print(f"  - Mostrando posición real durante movimiento: {posicion}")
+    else:
+        texto_posicion = posicion
+    
     color_posicion = "#FFA500" if estado_movimiento == "En movimiento" else \
                     "#4CAF50" if posicion == "Izquierda" else \
                     "#FF5722"
