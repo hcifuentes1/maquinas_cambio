@@ -117,13 +117,6 @@ class ReplaySystemBasculacion:
     def get_basculacion_data(self, basculacion_id, maquina_id):
         """
         Obtiene los datos completos de un evento de basculación
-        
-        Args:
-            basculacion_id: Timestamp de inicio del evento de basculación
-            maquina_id: ID de la máquina
-            
-        Returns:
-            DataFrame: Datos del evento completo (varios registros secuenciales)
         """
         try:
             conn = sqlite3.connect(self.db_path)
@@ -131,8 +124,7 @@ class ReplaySystemBasculacion:
             # Primero obtener el timestamp de inicio exacto
             inicio_dt = pd.to_datetime(basculacion_id)
             
-            # Calcular tiempo estimado para incluir todo el evento (duración típica + margen)
-            # Asumimos que una basculación típica toma menos de 30 segundos
+            # Calcular tiempo estimado para incluir todo el evento
             fin_dt = inicio_dt + timedelta(seconds=30)
             
             # Consultar todos los datos durante este periodo
@@ -140,7 +132,7 @@ class ReplaySystemBasculacion:
                 SELECT *
                 FROM mediciones
                 WHERE maquina_id = ?
-                  AND timestamp BETWEEN ? AND ?
+                AND timestamp BETWEEN ? AND ?
                 ORDER BY timestamp ASC
             """
             
@@ -703,7 +695,116 @@ def replay_status_callback_wrapper(n_play, n_pause, n_stop, n_intervals,
    
     return ["Esperando selección...", 0] + date_values
 
-
+def update_replay_status_callback_wrapper(n_play, n_pause, n_stop, n_intervals,
+                                   selected_date, selected_machine, selected_basculacion, 
+                                   speed, replay_system):
+    """
+    Wrapper para el callback de estado del replay.
+    
+    Args:
+        n_play: Clicks del botón reproducir
+        n_pause: Clicks del botón pausar
+        n_stop: Clicks del botón detener
+        n_intervals: Número de intervalos
+        selected_date: Fecha seleccionada
+        selected_machine: ID de máquina seleccionada
+        selected_basculacion: Evento de basculación seleccionado
+        speed: Valor de velocidad de reproducción
+        replay_system: Sistema de replay
+    """
+    from __main__ import data_lock, estado_maquinas
+    
+    ctx = callback_context
+    available_dates = replay_system.get_available_dates()
+   
+    # Valores por defecto para las fechas
+    if available_dates:
+        min_date = datetime.strptime(min(available_dates), '%Y-%m-%d').date()
+        max_date = datetime.strptime(max(available_dates), '%Y-%m-%d').date()
+        date_values = [min_date, max_date, max_date]
+    else:
+        date_values = [None, None, None]
+   
+    # Si no hay trigger, retorna valores iniciales
+    if not ctx.triggered:
+        return ["Esperando selección...", 0] + date_values
+   
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    try:
+        if trigger_id == 'replay-play-button' and n_play and selected_date and selected_machine and selected_basculacion:
+            # Obtener datos del evento de basculación seleccionado
+            basculacion_timestamp = pd.to_datetime(selected_basculacion)
+           
+            # Obtener los datos de este evento específico
+            datos_evento = replay_system.get_basculacion_data(
+                basculacion_timestamp,
+                selected_machine
+            )
+           
+            if datos_evento.empty:
+                return ["Error: No se encontraron datos para este evento", 0] + date_values
+           
+            # Configurar replay con estructura mejorada
+            replay_system.current_replay = {
+                'data': datos_evento,
+                'current_index': 0,
+                'speed': speed if speed is not None else 1.0,
+                'paused': False,
+                'total_frames': len(datos_evento),
+                'machine_id': selected_machine
+            }
+           
+            return [f"Reproduciendo evento de {basculacion_timestamp.strftime('%H:%M:%S')}", 0] + date_values
+       
+        elif trigger_id == 'replay-pause-button' and n_pause and replay_system.current_replay:
+            # Alternar el estado de pausa
+            replay_system.current_replay['paused'] = not replay_system.current_replay.get('paused', False)
+            estado = "Pausado" if replay_system.current_replay['paused'] else "Reproduciendo"
+           
+            current_idx = replay_system.current_replay['current_index']
+            progress = (current_idx / replay_system.current_replay['total_frames']) * 100
+           
+            return [f"{estado} en posición {current_idx+1}/{replay_system.current_replay['total_frames']}", progress] + date_values
+       
+        elif trigger_id == 'replay-stop-button' and n_stop:
+            # Limpiar el replay
+            replay_system.current_replay = None
+            return ["Reproducción detenida", 0] + date_values
+       
+        elif trigger_id == 'replay-interval-component' and replay_system.current_replay:
+            # Si está pausado, no hacer nada
+            if replay_system.current_replay.get('paused', False):
+                current_idx = replay_system.current_replay['current_index']
+                total_frames = replay_system.current_replay.get('total_frames', 1)
+                progress = (current_idx / total_frames) * 100
+                return [f"Pausado en posición {current_idx+1}/{total_frames}", progress] + date_values
+           
+            # Avanzar reproducción según velocidad
+            speed = replay_system.current_replay.get('speed', 1.0)
+            frames_to_advance = max(1, round(speed))
+           
+            current_idx = replay_system.current_replay['current_index']
+            current_idx = min(current_idx + frames_to_advance, replay_system.current_replay['total_frames'] - 1)
+            
+            replay_system.current_replay['current_index'] = current_idx
+           
+            # Calcular progreso
+            progress = (current_idx / replay_system.current_replay['total_frames']) * 100
+           
+            # Mostrar información del frame actual
+            current_time = replay_system.current_replay['data'].iloc[current_idx]['timestamp']
+            time_str = current_time.strftime('%H:%M:%S.%f')[:-3]
+           
+            return [f"Reproduciendo: {time_str} ({current_idx+1}/{replay_system.current_replay['total_frames']})", progress] + date_values
+           
+    except Exception as e:
+        import traceback
+        print(f"Error en reproducción: {str(e)}")
+        traceback.print_exc()
+        return [f"Error: {str(e)}", 0] + date_values
+   
+    return ["Esperando selección...", 0] + date_values
 
 
 
