@@ -1,0 +1,15 @@
+{
+    "email_notifications": {
+        "enabled": false,
+        "smtp_server": "",
+        "smtp_port": 587,
+        "sender_email": "",
+        "sender_password": "",
+        "recipients": []
+    },
+    "alert_thresholds": {
+        "critical_health_score": 40,
+        "warning_health_score": 70,
+        "maintenance_interval_days": 30
+    }
+}

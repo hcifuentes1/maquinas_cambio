@@ -11,17 +11,24 @@ from ml_monitor import MonitoringML
 from maquina_cambio import crear_svg_maquina, crear_indicador_progreso
 from replay_system_basculacion import ReplaySystemBasculacion, create_replay_controls_basculacion, register_replay_callbacks_basculacion
 from predictive_maintenance import PredictiveMaintenanceSystem
+from maintenance_dashboard import setup_predictive_maintenance
+
+
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.DARKLY])
+app.title = "Monitor de Máquinas de Cambio - Metro de Santiago"
+
+# Mutex para sincronización de datos
+data_lock = Lock()
 
 # Inicializar el monitor ML y sistema de replay
 ml_monitor = MonitoringML()
 replay_system = ReplaySystemBasculacion(ml_monitor.db_path)
 predictive_system = PredictiveMaintenanceSystem(ml_monitor.db_path)  # Nuevo
 
-# Mutex para sincronización de datos
-data_lock = Lock()
 
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.DARKLY])
-app.title = "Monitor de Máquinas de Cambio - Metro de Santiago"
+maintenance_dashboard, registrar_estado_maquina = setup_predictive_maintenance(
+    app, ml_monitor, predictive_system
+)
 
 # =========================================
 # Configuración de simulación realista
@@ -90,7 +97,7 @@ def simular_maquina(maquina_id):
     """Simula el comportamiento de una máquina de cambio"""
     config = MAQUINAS[maquina_id]
     estado = estado_maquinas[maquina_id]
-    tiempo_espera = 3  # segundos de espera antes del movimiento
+    tiempo_espera = 6  # segundos de espera antes del movimiento
     
     # Contadores para actualización de estados
     contador_health = 0
@@ -180,6 +187,9 @@ def simular_maquina(maquina_id):
                         # Calcular estado de salud
                         health_status = predictive_system.get_machine_health(maquina_id, recent_data)
                         estado["health_status"] = health_status
+                        
+                        # NUEVO: Registrar estado de la máquina en el sistema de mantenimiento
+                        registrar_estado_maquina(maquina_id, estado)
                         
                         # Añadir alerta si el estado es crítico
                         if health_status["status"] == "critical":
@@ -680,6 +690,18 @@ def crear_pestaña_replay():
         ])
     ])
 
+def crear_pestaña_mantenimiento():
+    """
+    Crea la pestaña de mantenimiento predictivo
+    
+    Returns:
+        html.Div: Contenido de la pestaña de mantenimiento
+    """
+    return html.Div([
+        html.H3("Mantenimiento Predictivo", className="text-center my-3"),
+        maintenance_dashboard.create_maintenance_dashboard_layout()
+    ])
+
 # Layout principal con pestañas
 app.layout = dbc.Container([
     html.H1("Monitor de Máquinas de Cambio", className="text-center my-4"),
@@ -688,6 +710,7 @@ app.layout = dbc.Container([
     dbc.Tabs([
         dbc.Tab(crear_pestaña_monitoreo(), label="Monitoreo en Tiempo Real", tab_id="tab-monitoreo"),
         dbc.Tab(crear_pestaña_replay(), label="Sistema de Replay", tab_id="tab-replay"),
+        dbc.Tab(crear_pestaña_mantenimiento(), label="Mantenimiento", tab_id="tab-mantenimiento")
     ], id="tabs-principal"),
     
     # Componentes de intervalo para actualización
