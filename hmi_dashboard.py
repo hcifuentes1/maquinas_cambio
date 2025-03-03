@@ -10,10 +10,12 @@ import dash_bootstrap_components as dbc
 from ml_monitor import MonitoringML
 from maquina_cambio import crear_svg_maquina, crear_indicador_progreso
 from replay_system_basculacion import ReplaySystemBasculacion, create_replay_controls_basculacion, register_replay_callbacks_basculacion
+from predictive_maintenance import PredictiveMaintenanceSystem
 
 # Inicializar el monitor ML y sistema de replay
 ml_monitor = MonitoringML()
 replay_system = ReplaySystemBasculacion(ml_monitor.db_path)
+predictive_system = PredictiveMaintenanceSystem(ml_monitor.db_path)  # Nuevo
 
 # Mutex para sincronización de datos
 data_lock = Lock()
@@ -51,7 +53,14 @@ estado_maquinas = {
         "alertas": [],
         "predicciones": {},
         "estadisticas": {},
-        "modo_operacion": "normal"  # normal/replay
+        "modo_operacion": "normal",  # normal/replay
+        "health_status": {           # Nueva sección para mantenimiento predictivo
+            "status": "unknown",
+            "health_score": 0,
+            "recommendations": [],
+            "maintenance_due": "Unknown",
+            "last_updated": None
+        }
     },
     "TSE-54B": {
         "timestamp": [],
@@ -62,7 +71,14 @@ estado_maquinas = {
         "alertas": [],
         "predicciones": {},
         "estadisticas": {},
-        "modo_operacion": "normal"  # normal/replay
+        "modo_operacion": "normal",  # normal/replay
+        "health_status": {           # Nueva sección para mantenimiento predictivo
+            "status": "unknown",
+            "health_score": 0,
+            "recommendations": [],
+            "maintenance_due": "Unknown",
+            "last_updated": None
+        }
     }
 }
 
@@ -75,7 +91,10 @@ def simular_maquina(maquina_id):
     config = MAQUINAS[maquina_id]
     estado = estado_maquinas[maquina_id]
     tiempo_espera = 3  # segundos de espera antes del movimiento
-   
+    
+    # Contadores para actualización de estados
+    contador_health = 0
+    
     while True:
         try:
             with data_lock:
@@ -143,6 +162,34 @@ def simular_maquina(maquina_id):
                 if len(estado["timestamp"]) % 20 == 0:
                     estado["predicciones"] = ml_monitor.predecir_tendencias(maquina_id)
                     estado["estadisticas"] = ml_monitor.obtener_estadisticas(maquina_id)
+                
+                # NUEVO: Actualizar estado de salud cada 60 segundos (o 120 iteraciones)
+                contador_health += 1
+                if contador_health >= 120:
+                    contador_health = 0
+                    try:
+                        # Obtener datos recientes para análisis
+                        recent_data = pd.DataFrame({
+                            'timestamp': estado["timestamp"][-100:],
+                            'voltaje': estado["voltaje"][-100:],
+                            'corriente': estado["corriente"][-100:],
+                            'posicion': [estado["posicion"]] * min(100, len(estado["timestamp"])),
+                            'ciclo_progreso': [estado["ciclo_progreso"]] * min(100, len(estado["timestamp"]))
+                        })
+                        
+                        # Calcular estado de salud
+                        health_status = predictive_system.get_machine_health(maquina_id, recent_data)
+                        estado["health_status"] = health_status
+                        
+                        # Añadir alerta si el estado es crítico
+                        if health_status["status"] == "critical":
+                            estado["alertas"].append(
+                                f"{now.strftime('%H:%M:%S')} - ALERTA DE MANTENIMIENTO: {health_status['message']}"
+                            )
+                            
+                        print(f"Actualizado estado de salud para {maquina_id}: {health_status['status']}")
+                    except Exception as e:
+                        print(f"Error actualizando estado de salud: {e}")
                
                 # Mantener solo los últimos N puntos para la visualización
                 max_points = 100
@@ -158,6 +205,63 @@ def simular_maquina(maquina_id):
             print(traceback.format_exc())
             
         time.sleep(0.5)
+        
+        
+        
+def crear_tarjeta_health(maquina_id):
+    """Crea una tarjeta con la información de salud de la máquina"""
+    estado = estado_maquinas[maquina_id]
+    health = estado.get("health_status", {})
+    
+    # Determinar color según estado
+    status = health.get("status", "unknown")
+    if status == "good":
+        color = "success"
+        icon = "✓"
+    elif status == "warning":
+        color = "warning"
+        icon = "⚠️"
+    elif status == "critical":
+        color = "danger"
+        icon = "⛔"
+    else:
+        color = "secondary"
+        icon = "?"
+    
+    # Crear componente
+    return dbc.Card([
+        dbc.CardHeader([
+            html.H5([
+                f"{icon} Estado de Salud ", 
+                dbc.Badge(
+                    f"{health.get('health_score', 0):.1f}%", 
+                    color=color,
+                    className="ms-2"
+                )
+            ], className="d-flex justify-content-between align-items-center")
+        ], className=f"bg-{color} text-white"),
+        
+        dbc.CardBody([
+            html.Div([
+                html.Strong("Diagnóstico: "),
+                html.Span(health.get("message", "Sin datos suficientes"))
+            ], className="mb-2"),
+            
+            html.Div([
+                html.Strong("Próximo mantenimiento: "),
+                html.Span(health.get("maintenance_due", "Desconocido"))
+            ], className="mb-3"),
+            
+            html.H6("Recomendaciones:"),
+            html.Ul([
+                html.Li(rec) for rec in health.get("recommendations", ["Sin recomendaciones"])
+            ], className="small"),
+            
+            html.Div([
+                html.Small(f"Última actualización: {health.get('last_updated', 'Nunca')}")
+            ], className="text-muted mt-2 text-end")
+        ])
+    ], className="mb-3", id=f"health-card-{maquina_id}")
 
 # =========================================
 # Interfaz de usuario profesional
@@ -229,7 +333,14 @@ def crear_tarjeta_maquina(maquina_id):
                                 style={'color': '#FF9800'}
                             )
                         ], width=6)
-                    ], className="mt-4")
+                    ], className="mt-4"),
+                    
+                    # NUEVO: Añadir tarjeta de estado de salud
+                    html.Div(
+                        crear_tarjeta_health(maquina_id),
+                        id=f"health-section-{maquina_id}",
+                        className="mt-3"
+                    )
                 ], width=4),
                
                 # Columna 2: Gráficos y predicciones
@@ -396,6 +507,64 @@ def actualizar_ui(n_intervals, replay_intervals, maquina_id):
                 print(f"Error creando contenido de predicciones para {maquina_id}: {e}")
                 pred_content = html.P("Error en predicciones")
            
+            # Crear tarjeta de salud de mantenimiento predictivo
+            try:
+                health = estado.get("health_status", {})
+                
+                # Determinar color según estado
+                status = health.get("status", "unknown")
+                if status == "good":
+                    color = "success"
+                    icon = "✓"
+                elif status == "warning":
+                    color = "warning"
+                    icon = "⚠️"
+                elif status == "critical":
+                    color = "danger"
+                    icon = "⛔"
+                else:
+                    color = "secondary"
+                    icon = "?"
+                
+                health_card = dbc.Card([
+                    dbc.CardHeader([
+                        html.H5([
+                            f"{icon} Estado de Salud ", 
+                            dbc.Badge(
+                                f"{health.get('health_score', 0):.1f}%", 
+                                color=color,
+                                className="ms-2"
+                            )
+                        ], className="d-flex justify-content-between align-items-center")
+                    ], className=f"bg-{color} text-white"),
+                    
+                    dbc.CardBody([
+                        html.Div([
+                            html.Strong("Diagnóstico: "),
+                            html.Span(health.get("message", "Sin datos suficientes"))
+                        ], className="mb-2"),
+                        
+                        html.Div([
+                            html.Strong("Próximo mantenimiento: "),
+                            html.Span(health.get("maintenance_due", "Desconocido"))
+                        ], className="mb-3"),
+                        
+                        html.H6("Recomendaciones:"),
+                        html.Ul([
+                            html.Li(rec) for rec in health.get("recommendations", ["Sin recomendaciones"])
+                        ], className="small"),
+                        
+                        html.Div([
+                            html.Small(f"Última actualización: {health.get('last_updated', 'Nunca')}")
+                        ], className="text-muted mt-2 text-end")
+                    ])
+                ])
+                print(f"Tarjeta de salud creada correctamente para {maquina_id}")
+            except Exception as e:
+                print(f"Error creando tarjeta de salud para {maquina_id}: {e}")
+                # Crear tarjeta por defecto
+                health_card = dbc.Card(dbc.CardBody("Error cargando datos de salud"))
+           
             # Crear tabla histórica
             try:
                 df = ml_monitor.obtener_ultimas_mediciones(maquina_id)
@@ -460,7 +629,8 @@ def actualizar_ui(n_intervals, replay_intervals, maquina_id):
                 maquina_viz,
                 pred_content,
                 tabla,
-                modo_operacion
+                modo_operacion,
+                health_card  # Añadimos la tarjeta de salud a la lista de retornos
             )
             
     except Exception as e:
@@ -759,12 +929,12 @@ def registrar_callbacks():
              Output(f"maquina-cambio-{maquina_id}", "children", allow_duplicate=True),
              Output(f"predicciones-{maquina_id}", "children", allow_duplicate=True),
              Output(f"tabla-historico-{maquina_id}", "children", allow_duplicate=True),
-             Output(f"modo-operacion-{maquina_id}", "children", allow_duplicate=True)],
+             Output(f"modo-operacion-{maquina_id}", "children", allow_duplicate=True),
+             Output(f"health-card-{maquina_id}", "children", allow_duplicate=True)],  # Nueva salida
             [Input('interval-component', 'n_intervals'),
              Input('replay-interval-component', 'n_intervals')],
             prevent_initial_call=True
         )(lambda n_intervals, replay_intervals, mid=maquina_id: update_maquina(n_intervals, replay_intervals, mid))
-
 # Registrar todos los callbacks
 registrar_callbacks()
 
